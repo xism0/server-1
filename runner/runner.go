@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ func Run(router http.Handler, conf *config.Configuration) {
 			httpHandler = redirectToHTTPS(strconv.Itoa(conf.Server.SSL.Port))
 		}
 
-		addr := fmt.Sprintf("%s:%d", conf.Server.SSL.ListenAddr, conf.Server.SSL.Port)
+		network, addr := listenAddrParse(conf.Server.SSL.ListenAddr, conf.Server.SSL.Port)
 		s := &http.Server{
 			Addr:    addr,
 			Handler: router,
@@ -41,24 +42,32 @@ func Run(router http.Handler, conf *config.Configuration) {
 		}
 		fmt.Println("Started Listening for TLS connection on " + addr)
 		go func() {
-			listener := startListening(addr, conf.Server.KeepAlivePeriodSeconds)
+			listener := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
 			log.Fatal(s.ServeTLS(listener, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey))
 		}()
 	}
-	addr := fmt.Sprintf("%s:%d", conf.Server.ListenAddr, conf.Server.Port)
+	network, addr := listenAddrParse(conf.Server.ListenAddr, conf.Server.Port)
 	fmt.Println("Started Listening for plain HTTP connection on " + addr)
 	server := &http.Server{Addr: addr, Handler: httpHandler}
-
-	log.Fatal(server.Serve(startListening(addr, conf.Server.KeepAlivePeriodSeconds)))
+	log.Fatal(server.Serve(startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)))
 }
 
-func startListening(addr string, keepAlive int) net.Listener {
+func startListening(network, addr string, keepAlive int) net.Listener {
 	lc := net.ListenConfig{KeepAlive: time.Duration(keepAlive) * time.Second}
-	conn, err := lc.Listen(context.Background(), "tcp", addr)
+	conn, err := lc.Listen(context.Background(), network, addr)
 	if err != nil {
 		log.Fatalln("Could not listen on", addr, err)
 	}
 	return conn
+}
+
+func listenAddrParse(ListenAddr string, Port int) (string, string) {
+	if strings.HasPrefix(ListenAddr, "unix:") {
+		path := strings.TrimPrefix(ListenAddr, "unix:")
+		os.Remove(path)
+		return "unix", path
+	}
+	return "tcp", fmt.Sprintf("%s:%d", ListenAddr, Port)
 }
 
 func redirectToHTTPS(port string) http.HandlerFunc {
