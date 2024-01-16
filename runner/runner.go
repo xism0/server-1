@@ -8,8 +8,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gotify/server/v2/config"
@@ -19,7 +21,8 @@ import (
 // Run starts the http server and if configured a https server.
 func Run(router http.Handler, conf *config.Configuration) {
 	httpHandler := router
-
+	done := make(chan os.Signal, 1)
+	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	if *conf.Server.SSL.Enabled {
 		if *conf.Server.SSL.RedirectToHTTPS {
 			httpHandler = redirectToHTTPS(strconv.Itoa(conf.Server.SSL.Port))
@@ -30,7 +33,8 @@ func Run(router http.Handler, conf *config.Configuration) {
 			Addr:    addr,
 			Handler: router,
 		}
-
+		l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
+		defer cleanUpServer(s)
 		if *conf.Server.SSL.LetsEncrypt.Enabled {
 			certManager := autocert.Manager{
 				Prompt:     func(tosURL string) bool { return *conf.Server.SSL.LetsEncrypt.AcceptTOS },
@@ -40,19 +44,43 @@ func Run(router http.Handler, conf *config.Configuration) {
 			httpHandler = certManager.HTTPHandler(httpHandler)
 			s.TLSConfig = &tls.Config{GetCertificate: certManager.GetCertificate}
 		}
-		fmt.Println("Started Listening for TLS connection on " + addr)
 		go func() {
-			l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
-			defer l.Close()
-			log.Fatal(s.ServeTLS(l, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey))
+			runTLS(s, l, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey)
 		}()
 	}
 	network, addr := listenAddrParse(conf.Server.ListenAddr, conf.Server.Port)
-	fmt.Println("Started Listening for plain HTTP connection on " + addr)
-	server := &http.Server{Addr: addr, Handler: httpHandler}
+	s := &http.Server{Addr: addr, Handler: httpHandler}
 	l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
+	go func() {
+		run(s, l)
+	}()
+	defer cleanUpServer(s)
+	<-done
+	fmt.Println("Shutting down the server...")
+}
+
+func run(s *http.Server, l net.Listener) {
+	fmt.Println("Started Listening for plain connection on", l.Addr().Network(), l.Addr().String())
 	defer l.Close()
-	log.Fatal(server.Serve(l))
+	if err := s.Serve(l); err != http.ErrServerClosed {
+		log.Fatalln("Could not serve", err)
+	}
+}
+
+func runTLS(s *http.Server, l net.Listener, cert, key string) {
+	fmt.Println("Started Listening for TLS connection on", l.Addr().Network(), l.Addr().String())
+	defer l.Close()
+	if err := s.ServeTLS(l, cert, key); err != http.ErrServerClosed {
+		log.Fatalln("Could not serve", err)
+	}
+}
+
+func cleanUpServer(s *http.Server) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		fmt.Print("Could not shutdown", err)
+	}
 }
 
 func startListening(network, addr string, keepAlive int) net.Listener {
@@ -66,9 +94,7 @@ func startListening(network, addr string, keepAlive int) net.Listener {
 
 func listenAddrParse(ListenAddr string, Port int) (string, string) {
 	if strings.HasPrefix(ListenAddr, "unix:") {
-		path := strings.TrimPrefix(ListenAddr, "unix:")
-		os.Remove(path)
-		return "unix", path
+		return "unix", strings.TrimPrefix(ListenAddr, "unix:")
 	}
 	return "tcp", fmt.Sprintf("%s:%d", ListenAddr, Port)
 }
