@@ -49,8 +49,8 @@ func Run(router http.Handler, conf *config.Configuration) {
 	network, addr := listenAddrParse(conf.Server.ListenAddr, conf.Server.Port)
 	s := &http.Server{Addr: addr, Handler: httpHandler}
 	l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
-	go run(s, l)
 	defer cleanUpServer(s)
+	go run(s, l)
 	<-done
 	fmt.Println("Shutting down the server...")
 }
