@@ -42,14 +42,17 @@ func Run(router http.Handler, conf *config.Configuration) {
 		}
 		fmt.Println("Started Listening for TLS connection on " + addr)
 		go func() {
-			listener := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
-			log.Fatal(s.ServeTLS(listener, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey))
+			l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
+			defer l.Close()
+			log.Fatal(s.ServeTLS(l, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey))
 		}()
 	}
 	network, addr := listenAddrParse(conf.Server.ListenAddr, conf.Server.Port)
 	fmt.Println("Started Listening for plain HTTP connection on " + addr)
 	server := &http.Server{Addr: addr, Handler: httpHandler}
-	log.Fatal(server.Serve(startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)))
+	l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
+	defer l.Close()
+	log.Fatal(server.Serve(l))
 }
 
 func startListening(network, addr string, keepAlive int) net.Listener {
