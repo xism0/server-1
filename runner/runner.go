@@ -44,16 +44,12 @@ func Run(router http.Handler, conf *config.Configuration) {
 			httpHandler = certManager.HTTPHandler(httpHandler)
 			s.TLSConfig = &tls.Config{GetCertificate: certManager.GetCertificate}
 		}
-		go func() {
-			runTLS(s, l, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey)
-		}()
+		go runTLS(s, l, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey)
 	}
 	network, addr := listenAddrParse(conf.Server.ListenAddr, conf.Server.Port)
 	s := &http.Server{Addr: addr, Handler: httpHandler}
 	l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
-	go func() {
-		run(s, l)
-	}()
+	go run(s, l)
 	defer cleanUpServer(s)
 	<-done
 	fmt.Println("Shutting down the server...")
