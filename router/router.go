@@ -33,6 +33,11 @@ func Create(db *database.GormDatabase, vInfo *model.VersionInfo, conf *config.Co
 	if conf.Server.SSL.Enabled != nil && conf.Server.SSL.RedirectToHTTPS != nil && *conf.Server.SSL.Enabled && *conf.Server.SSL.RedirectToHTTPS {
 		g.Use(func(ctx *gin.Context) {
 			if ctx.Request.TLS == nil {
+				if ctx.Request.Method != http.MethodGet && ctx.Request.Method != http.MethodHead {
+					ctx.Data(http.StatusBadRequest, "text/plain; charset=utf-8", []byte("Use HTTPS"))
+					ctx.Abort()
+					return
+				}
 				host := ctx.Request.Host
 				if strings.Contains(host, ":") {
 					host = host[:strings.Index(host, ":")]
