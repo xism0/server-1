@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -29,6 +30,23 @@ func Create(db *database.GormDatabase, vInfo *model.VersionInfo, conf *config.Co
 	g.Use(gin.LoggerWithFormatter(logFormatter), gin.Recovery(), gerror.Handler(), location.Default())
 	g.NoRoute(gerror.NotFound())
 
+	if conf.Server.SSL.Enabled != nil && conf.Server.SSL.RedirectToHTTPS != nil && *conf.Server.SSL.Enabled && *conf.Server.SSL.RedirectToHTTPS {
+		g.Use(func(ctx *gin.Context) {
+			if ctx.Request.TLS == nil {
+				host := ctx.Request.Host
+				if strings.Contains(host, ":") {
+					host = host[:strings.Index(host, ":")]
+				}
+				if conf.Server.SSL.Port != 443 {
+					host = fmt.Sprintf("%s:%d", host, conf.Server.SSL.Port)
+				}
+				ctx.Redirect(http.StatusFound, fmt.Sprintf("https://%s%s", host, ctx.Request.RequestURI))
+				ctx.Abort()
+				return
+			}
+			ctx.Next()
+		})
+	}
 	streamHandler := stream.New(
 		time.Duration(conf.Server.Stream.PingPeriodSeconds)*time.Second, 15*time.Second, conf.Server.Stream.AllowedOrigins)
 	go func() {

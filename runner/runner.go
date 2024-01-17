@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,42 +19,31 @@ import (
 
 // Run starts the http server and if configured a https server.
 func Run(router http.Handler, conf *config.Configuration) {
-	httpHandler := router
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	s := &http.Server{Handler: router}
 	if *conf.Server.SSL.Enabled {
-		if *conf.Server.SSL.RedirectToHTTPS {
-			httpHandler = redirectToHTTPS(strconv.Itoa(conf.Server.SSL.Port))
-		}
-
-		network, addr := listenAddrParse(conf.Server.SSL.ListenAddr, conf.Server.SSL.Port)
-		s := &http.Server{
-			Addr:    addr,
-			Handler: router,
-		}
-		l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
-		defer cleanUpServer(s)
 		if *conf.Server.SSL.LetsEncrypt.Enabled {
 			certManager := autocert.Manager{
 				Prompt:     func(tosURL string) bool { return *conf.Server.SSL.LetsEncrypt.AcceptTOS },
 				HostPolicy: autocert.HostWhitelist(conf.Server.SSL.LetsEncrypt.Hosts...),
 				Cache:      autocert.DirCache(conf.Server.SSL.LetsEncrypt.Cache),
 			}
-			httpHandler = certManager.HTTPHandler(httpHandler)
+			s.Handler = certManager.HTTPHandler(s.Handler)
 			s.TLSConfig = &tls.Config{GetCertificate: certManager.GetCertificate}
 		}
-		go runTLS(s, l, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey)
+		go runTLS(s, conf)
 	}
-	network, addr := listenAddrParse(conf.Server.ListenAddr, conf.Server.Port)
-	s := &http.Server{Addr: addr, Handler: httpHandler}
-	l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
 	defer cleanUpServer(s)
-	go run(s, l)
+	go run(s, conf)
 	<-done
+	close(done)
 	fmt.Println("Shutting down the server...")
 }
 
-func run(s *http.Server, l net.Listener) {
+func run(s *http.Server, conf *config.Configuration) {
+	network, addr := listenAddrParse(conf.Server.ListenAddr, conf.Server.Port)
+	l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
 	fmt.Println("Started Listening for plain connection on", l.Addr().Network(), l.Addr().String())
 	defer l.Close()
 	if err := s.Serve(l); err != http.ErrServerClosed {
@@ -63,10 +51,12 @@ func run(s *http.Server, l net.Listener) {
 	}
 }
 
-func runTLS(s *http.Server, l net.Listener, cert, key string) {
+func runTLS(s *http.Server, conf *config.Configuration) {
+	network, addr := listenAddrParse(conf.Server.SSL.ListenAddr, conf.Server.SSL.Port)
+	l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
 	fmt.Println("Started Listening for TLS connection on", l.Addr().Network(), l.Addr().String())
 	defer l.Close()
-	if err := s.ServeTLS(l, cert, key); err != http.ErrServerClosed {
+	if err := s.ServeTLS(l, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey); err != http.ErrServerClosed {
 		log.Fatalln("Could not serve", err)
 	}
 }
