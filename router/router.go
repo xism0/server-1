@@ -32,24 +32,24 @@ func Create(db *database.GormDatabase, vInfo *model.VersionInfo, conf *config.Co
 
 	if conf.Server.SSL.Enabled != nil && conf.Server.SSL.RedirectToHTTPS != nil && *conf.Server.SSL.Enabled && *conf.Server.SSL.RedirectToHTTPS {
 		g.Use(func(ctx *gin.Context) {
-			if ctx.Request.TLS == nil {
-				if ctx.Request.Method != http.MethodGet && ctx.Request.Method != http.MethodHead {
-					ctx.Data(http.StatusBadRequest, "text/plain; charset=utf-8", []byte("Use HTTPS"))
-					ctx.Abort()
-					return
-				}
-				host := ctx.Request.Host
-				if strings.Contains(host, ":") {
-					host = host[:strings.Index(host, ":")]
-				}
-				if conf.Server.SSL.Port != 443 {
-					host = fmt.Sprintf("%s:%d", host, conf.Server.SSL.Port)
-				}
-				ctx.Redirect(http.StatusFound, fmt.Sprintf("https://%s%s", host, ctx.Request.RequestURI))
+			if ctx.Request.TLS != nil {
+				ctx.Next()
+				return
+			}
+			if ctx.Request.Method != http.MethodGet && ctx.Request.Method != http.MethodHead {
+				ctx.Data(http.StatusBadRequest, "text/plain; charset=utf-8", []byte("Use HTTPS"))
 				ctx.Abort()
 				return
 			}
-			ctx.Next()
+			host := ctx.Request.Host
+			if idx := strings.LastIndex(host, ":"); idx != -1 {
+				host = host[:idx]
+			}
+			if conf.Server.SSL.Port != 443 {
+				host = fmt.Sprintf("%s:%d", host, conf.Server.SSL.Port)
+			}
+			ctx.Redirect(http.StatusFound, fmt.Sprintf("https://%s%s", host, ctx.Request.RequestURI))
+			ctx.Abort()
 		})
 	}
 	streamHandler := stream.New(
