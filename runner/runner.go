@@ -93,7 +93,7 @@ func startListening(network, addr string, keepAlive int) (net.Listener, error) {
 	lc := net.ListenConfig{KeepAlive: time.Duration(keepAlive) * time.Second}
 	conn, err := lc.Listen(context.Background(), network, addr)
 	if err != nil {
-		return nil, fmt.Errorf("Could not listen on %s %s", addr, err)
+		return nil, err
 	}
 	return conn, nil
 }
