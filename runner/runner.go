@@ -47,7 +47,9 @@ func Run(router http.Handler, conf *config.Configuration) {
 	})
 	g.Go(func() error {
 		<-gCtx.Done()
-		return cleanUpServer(s)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return s.Shutdown(ctx)
 	})
 	if err := g.Wait(); err != nil {
 		fmt.Println("Error while running the server", err)
@@ -81,12 +83,6 @@ func runTLS(s *http.Server, conf *config.Configuration) error {
 		return err
 	}
 	return nil
-}
-
-func cleanUpServer(s *http.Server) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return s.Shutdown(ctx)
 }
 
 func startListening(network, addr string, keepAlive int) (net.Listener, error) {
