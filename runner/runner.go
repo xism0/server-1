@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -15,13 +14,20 @@ import (
 
 	"github.com/gotify/server/v2/config"
 	"golang.org/x/crypto/acme/autocert"
+	"golang.org/x/sync/errgroup"
 )
 
 // Run starts the http server and if configured a https server.
 func Run(router http.Handler, conf *config.Configuration) {
-	done := make(chan os.Signal, 1)
-	signal.Notify(done, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		done := make(chan os.Signal, 1)
+		signal.Notify(done, os.Interrupt, syscall.SIGTERM)
+		<-done
+		cancel()
+	}()
 	s := &http.Server{Handler: router}
+	g, gCtx := errgroup.WithContext(ctx)
 	if *conf.Server.SSL.Enabled {
 		if *conf.Server.SSL.LetsEncrypt.Enabled {
 			certManager := autocert.Manager{
@@ -32,50 +38,64 @@ func Run(router http.Handler, conf *config.Configuration) {
 			s.Handler = certManager.HTTPHandler(s.Handler)
 			s.TLSConfig = &tls.Config{GetCertificate: certManager.GetCertificate}
 		}
-		go runTLS(s, conf)
+		g.Go(func() error {
+			return runTLS(s, conf)
+		})
 	}
-	defer cleanUpServer(s)
-	go run(s, conf)
-	<-done
-	close(done)
-	fmt.Println("Shutting down the server...")
+	g.Go(func() error {
+		return run(s, conf)
+	})
+	g.Go(func() error {
+		<-gCtx.Done()
+		return cleanUpServer(s)
+	})
+	if err := g.Wait(); err != nil {
+		fmt.Println("Error while running the server", err)
+		os.Exit(1)
+	}
 }
 
-func run(s *http.Server, conf *config.Configuration) {
+func run(s *http.Server, conf *config.Configuration) error {
 	network, addr := listenAddrParse(conf.Server.ListenAddr, conf.Server.Port)
-	l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
+	l, err := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
+	if err != nil {
+		return err
+	}
 	fmt.Println("Started Listening for plain connection on", l.Addr().Network(), l.Addr().String())
 	defer l.Close()
 	if err := s.Serve(l); err != http.ErrServerClosed {
-		log.Fatalln("Could not serve", err)
+		return err
 	}
+	return nil
 }
 
-func runTLS(s *http.Server, conf *config.Configuration) {
+func runTLS(s *http.Server, conf *config.Configuration) error {
 	network, addr := listenAddrParse(conf.Server.SSL.ListenAddr, conf.Server.SSL.Port)
-	l := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
+	l, err := startListening(network, addr, conf.Server.KeepAlivePeriodSeconds)
+	if err != nil {
+		return err
+	}
 	fmt.Println("Started Listening for TLS connection on", l.Addr().Network(), l.Addr().String())
 	defer l.Close()
 	if err := s.ServeTLS(l, conf.Server.SSL.CertFile, conf.Server.SSL.CertKey); err != http.ErrServerClosed {
-		log.Fatalln("Could not serve", err)
+		return err
 	}
+	return nil
 }
 
-func cleanUpServer(s *http.Server) {
+func cleanUpServer(s *http.Server) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.Shutdown(ctx); err != nil {
-		fmt.Print("Could not shutdown", err)
-	}
+	return s.Shutdown(ctx)
 }
 
-func startListening(network, addr string, keepAlive int) net.Listener {
+func startListening(network, addr string, keepAlive int) (net.Listener, error) {
 	lc := net.ListenConfig{KeepAlive: time.Duration(keepAlive) * time.Second}
 	conn, err := lc.Listen(context.Background(), network, addr)
 	if err != nil {
-		log.Fatalln("Could not listen on", addr, err)
+		return nil, fmt.Errorf("Could not listen on %s %s", addr, err)
 	}
-	return conn
+	return conn, nil
 }
 
 func listenAddrParse(ListenAddr string, Port int) (string, string) {
